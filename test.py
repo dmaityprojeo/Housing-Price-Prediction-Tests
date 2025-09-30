@@ -14,6 +14,7 @@ from sklearn.metrics import mean_absolute_percentage_error
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.ensemble import BaggingRegressor
 from sklearn.linear_model import LinearRegression
+import xgboost as xgb
 from sklearn.metrics import accuracy_score
 
 # import dataset
@@ -84,7 +85,10 @@ plt.close(fig)
 dataset.drop(['Id'], axis=1, inplace=True)
 
 # SalePrice has empty values. We can replace them with mean values to make the distribution symmetric instead of skewed.
-dataset['SalePrice'] = dataset['SalePrice'].fillna(dataset['SalePrice'].mean())
+# dataset['SalePrice'] = dataset['SalePrice'].fillna(dataset['SalePrice'].mean())
+# This has unintended consequence of creating single value cluster at the mean price point. Instead we can remove
+# the entries with missing SalePrice values
+dataset.dropna(subset=['SalePrice'], inplace=True)
 
 # drop all null values from dataset
 new_dataset = dataset.dropna()
@@ -135,9 +139,18 @@ model_LR.fit(X_train, Y_train)
 Y_pred_lr = model_LR.predict(X_valid)
 print(mean_absolute_percentage_error(Y_valid, Y_pred_lr))
 
-# SVM provides the best estimate
+# XGBoost model
+model_XGB = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=100, learning_rate=0.1, max_depth=3)
+model_XGB.fit(X_train, Y_train)
+Y_pred_xgb = model_XGB.predict(X_valid)
+print(mean_absolute_percentage_error(Y_valid, Y_pred_xgb))
+
+# XGBoost provides the best estimate followed by SVM. However, if we remove the entries with missing SalePRice data,
+# XGBoost has best estimates followed by random forest
 # apply bagging to see if prediction can be improved
-regr = BaggingRegressor(estimator=svm.SVR(), n_estimators=10, random_state=0).fit(X_train, Y_train)
+#regr = BaggingRegressor(estimator=svm.SVR(), n_estimators=10, random_state=0).fit(X_train, Y_train)
+regr = BaggingRegressor(estimator=RandomForestRegressor(), n_estimators=10, random_state=0).fit(X_train, Y_train)
+#regr = BaggingRegressor(estimator=xgb.XGBRegressor(objective='reg:squarederror', n_estimators=100, learning_rate=0.1, max_depth=3), n_estimators=10, random_state=0).fit(X_train, Y_train)
 Y_pred_bag = regr.predict(X_valid)
 print(mean_absolute_percentage_error(Y_valid, Y_pred_bag))
 
@@ -146,18 +159,24 @@ print(mean_absolute_percentage_error(Y_valid, Y_pred_bag))
 slope_svm, intercept_svm = np.polyfit(Y_valid, Y_pred_svm, 1)
 slope_rfr, intercept_rfr = np.polyfit(Y_valid, Y_pred_rfr, 1)
 slope_lr, intercept_lr = np.polyfit(Y_valid, Y_pred_lr, 1)
+slope_xgb, intercept_xgb = np.polyfit(Y_valid, Y_pred_xgb, 1)
 slope_bag, intercept_bag = np.polyfit(Y_valid, Y_pred_bag, 1)
 svm_fit = slope_svm * Y_valid + intercept_svm
 rfr_fit = slope_rfr * Y_valid + intercept_rfr
 lr_fit = slope_lr * Y_valid + intercept_lr
+xgb_fit = slope_xgb * Y_valid + intercept_xgb
 bag_fit = slope_bag * Y_valid + intercept_bag
+
+# SVM has very poor performance so we drop it from our visualization
+# Applying bagging technique to Random Forest Regressor instead gives good results (almost as good as XGBoost).
 
 fig = plt.figure()
 ax1 = fig.add_subplot(2, 2, 1)
-ax1.scatter(Y_valid.tolist(), Y_pred_svm.tolist(), s=5, c='b')
-ax1.plot(Y_valid, svm_fit, color='b', label='SVM Best Fit')
+ax1.scatter(Y_valid.tolist(), Y_pred_xgb.tolist(), s=5, c='g')
+ax1.plot(Y_valid, xgb_fit, color='b', label='XGBoost Best Fit')
 ax1.set_xlabel("Reported Price")
 ax1.set_ylabel("Predicted Price")
+ax1.set_title('XGBoost')
 ax1.tick_params(axis='x', labelrotation=45)
 ax1.ticklabel_format(useOffset=False, style='plain')
 ax2 = fig.add_subplot(2, 2, 2)
@@ -165,6 +184,7 @@ ax2.scatter(Y_valid.tolist(), Y_pred_rfr.tolist(), s=5, c='k')
 ax2.plot(Y_valid, rfr_fit, color='k', label='RF Best Fit')
 ax2.set_xlabel("Reported Price")
 ax2.set_ylabel("Predicted Price")
+ax2.set_title('Random Forest')
 ax2.tick_params(axis='x', labelrotation=45)
 ax2.ticklabel_format(useOffset=False, style='plain')
 ax3 = fig.add_subplot(2, 2, 3)
@@ -172,14 +192,39 @@ ax3.scatter(Y_valid.tolist(), Y_pred_lr.tolist(), s=5, c='r')
 ax3.plot(Y_valid, lr_fit, color='r', label='LR Best Fit')
 ax3.set_xlabel("Reported Price")
 ax3.set_ylabel("Predicted Price")
+ax3.set_title('Linear')
 ax3.tick_params(axis='x', labelrotation=45)
 ax3.ticklabel_format(useOffset=False, style='plain')
 ax4 = fig.add_subplot(2, 2, 4)
-ax4.scatter(Y_valid.tolist(), Y_pred_bag.tolist(), s=5, c='g')
-ax4.plot(Y_valid, bag_fit, color='g', label='SVM - Bagging Best Fit')
+ax4.scatter(Y_valid.tolist(), Y_pred_bag.tolist(), s=5, c='b')
+#ax4.plot(Y_valid, bag_fit, color='g', label='SVM - Bagging Best Fit')
+ax4.plot(Y_valid, bag_fit, color='g', label='RF - Bagging Best Fit')
 ax4.set_xlabel("Reported Price")
 ax4.set_ylabel("Predicted Price")
+ax4.set_title('Random Forest - Bagging')
 ax4.tick_params(axis='x', labelrotation=45)
 ax4.ticklabel_format(useOffset=False, style='plain')
+plt.tight_layout()
 fig.savefig('./outputs/compare_models_1.png')
 plt.close(fig)
+
+# generate residuals plot
+fig = plt.figure()
+data_residuals = pd.DataFrame({'X': Y_valid.tolist(), 'Y': Y_pred_xgb.tolist()})
+sns.residplot(x='X', y='Y', data=data_residuals, lowess=True, line_kws={'color': 'g'})
+data_residuals = pd.DataFrame({'X': Y_valid.tolist(), 'Y': Y_pred_rfr.tolist()})
+sns.residplot(x='X', y='Y', data=data_residuals, lowess=True, line_kws={'color': 'k'})
+data_residuals = pd.DataFrame({'X': Y_valid.tolist(), 'Y': Y_pred_lr.tolist()})
+sns.residplot(x='X', y='Y', data=data_residuals, lowess=True, line_kws={'color': 'r'})
+data_residuals = pd.DataFrame({'X': Y_valid.tolist(), 'Y': Y_pred_bag.tolist()})
+sns.residplot(x='X', y='Y', data=data_residuals, lowess=True, line_kws={'color': 'b'})
+plt.xlabel("Reported Price")
+plt.ylabel("Residuals")
+plt.title("Residual Plot")
+plt.axhline(0, color='grey', linestyle='--')  # Add a horizontal line at y=0
+fig.savefig('./outputs/compare_models_2.png')
+plt.close(fig)
+
+# the residuals plot clearly shows poor predictive capability of models at higher prices, likely due to fewer data
+# points. Also, random forest and XGBoost show similar performance and RF may be chosen doue to lower compute needs.
+# Bagging does not improve performance to any significant extent for this dataset.
